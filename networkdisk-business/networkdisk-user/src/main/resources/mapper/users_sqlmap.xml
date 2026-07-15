@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MyBatis映射文件DTD约束，定义了XML的语法规则 -->
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+    mapper标签：核心根标签，namespace属性必须与对应的Mapper接口全类名一致
+    作用：将XML中的SQL与Mapper接口的方法绑定
+-->
+<mapper namespace="com.disk.user.infrastructure.mapper.UserMapper">
+
+    <!--
+        结果映射（ResultMap）：定义数据库字段与Java实体类属性的映射关系
+        id：ResultMap唯一标识，供后续SQL的resultMap属性引用
+        type：映射的目标Java实体类（UserDO）
+        作用：解决数据库字段名（如USE_SPACE）与Java属性名（useSpace）不一致的问题，同时明确字段映射关系
+    -->
+    <resultMap id="BaseResultMap" type="com.disk.user.domain.entity.UserDO">
+        <!-- result：普通字段映射，property=Java属性名，column=数据库表字段名 -->
+        <result property="id" column="ID"/>                  <!-- 用户主键ID -->
+        <result property="useSpace" column="USE_SPACE"/>    <!-- 已使用存储空间 -->
+        <result property="totalSpace" column="TOTAL_SPACE"/><!-- 总存储空间 -->
+        <result property="email" column="EMAIL"/>            <!-- 邮箱/手机号（业务字段） -->
+        <result property="gmtCreate" column="GMT_CREATE"/>  <!-- 创建时间（GMT时间） -->
+        <result property="gmtModified" column="GMT_MODIFIED"/><!-- 修改时间（GMT时间） -->
+        <result property="nickName" column="NICK_NAME"/>    <!-- 用户昵称 -->
+        <result property="passwordHash" column="PASSWORD_HASH"/><!-- 密码哈希值（非明文） -->
+        <result property="lastLoginTime" column="LAST_LOGIN_TIME"/><!-- 最后登录时间 -->
+        <result property="profilePhotoUrl" column="PROFILE_PHOTO_URL"/><!-- 头像URL -->
+        <result property="deleted" column="DELETED"/>       <!-- 逻辑删除标识（0=未删除，1=已删除） -->
+        <result property="lockVersion" column="LOCK_VERSION"/><!-- 乐观锁版本号（用于并发控制） -->
+    </resultMap>
+
+    <!--
+        根据ID查询用户：对应UserMapper.findById(long id)方法
+        id：方法名，必须与接口中方法名一致
+        resultMap：引用上面定义的BaseResultMap，将查询结果映射为UserDO对象
+        SQL逻辑：查询deleted=0（未删除）的用户，且ID匹配传入的参数id
+    -->
+    <select id="findById" resultMap="BaseResultMap">
+        select * from user where deleted=0
+        <if test="id!=null">AND id = #{id}</if>
+    </select>
+
+    <!--
+        根据昵称查询用户：对应UserMapper.findByNickname(String nickname)方法
+        注意：XML中参数名是nickName（与UserDO的属性名一致），接口参数名是nickname，MyBatis会自动映射
+        SQL逻辑：查询未删除的用户，且昵称匹配传入的参数nickName
+    -->
+    <select id="findByNickname" resultMap="BaseResultMap">
+        select * from user where deleted=0
+        <if test="nickName!=null">AND nick_name = #{nickName}</if>
+    </select>
+
+    <!--
+        【扩展方法】根据邀请码查询用户（接口中未定义，可能是预留/未使用）
+        SQL逻辑：查询未删除的用户，且邀请码匹配传入的参数inviteCode
+    -->
+    <select id="findByInviteCode" resultMap="BaseResultMap">
+        select * from user where deleted=0
+        <if test="inviteCode!=null">AND invite_code = #{inviteCode}</if>
+    </select>
+
+    <!--
+        根据邮箱查询用户：对应UserMapper.findByEmail(String email)方法
+        SQL逻辑：查询未删除的用户，且邮箱/手机号匹配传入的参数email
+    -->
+    <select id="findByEmail" resultMap="BaseResultMap">
+        select * from user where deleted=0
+        <if test="email!=null">AND email = #{email}</if>
+    </select>
+
+    <!--
+        【扩展方法】根据手机号+密码哈希查询用户（接口中未定义，可能是预留/未使用）
+        SQL逻辑：查询未删除的用户，且手机号和密码哈希同时匹配传入的参数
+    -->
+    <select id="findByTelephoneAndPass" resultMap="BaseResultMap">
+        select * from user where deleted=0
+        <if test="telephone!=null">AND telephone = #{telephone}</if>
+        <if test="passwordHash!=null">AND password_hash = #{passwordHash}</if>
+    </select>
+</mapper>

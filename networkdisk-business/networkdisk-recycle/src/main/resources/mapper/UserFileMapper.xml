@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.disk.recycle.infrastructure.mapper.UserFileMapper">
+
+    <resultMap id="BaseResultMap" type="com.disk.recycle.domain.entity.UserFileDO">
+        <id property="id" column="ID"/>
+        <result property="userId" column="USER_ID"/>
+        <result property="parentId" column="PARENT_ID"/>
+        <result property="realFileId" column="REAL_FILE_ID"/>
+        <result property="filename" column="FILENAME"/>
+        <result property="folderFlag" column="FOLDER_FLAG"/>
+        <result property="fileSizeDesc" column="FILE_SIZE_DESC"/>
+        <result property="fileType" column="FILE_TYPE"/>
+        <result property="createUser" column="CREATE_USER"/>
+        <result property="gmtCreate" column="GMT_CREATE"/>
+        <result property="gmtModified" column="GMT_MODIFIED"/>
+        <result property="updateUser" column="UPDATE_USER"/>
+        <result property="deleted" column="DELETED"/>
+        <result property="lockVersion" column="LOCK_VERSION"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,user_id,parent_id,real_file_id,filename,folder_flag,file_size_desc,file_type,create_user,gmt_create,gmt_modified,update_user,deleted,lock_version
+    </sql>
+
+    <select id="listDeletedByUser" resultMap="BaseResultMap">
+        select <include refid="Base_Column_List"/>
+        from user_file
+        where deleted != 0 and user_id = #{userId}
+        order by gmt_modified desc
+    </select>
+
+    <update id="restoreByIds">
+        update user_file
+        set deleted = 0, update_user = #{userId}, gmt_modified = now()  -- 核心：删除标记改成0，代表未删除（恢复正常）
+        where user_id = #{userId}                                       -- 条件1：只能操作当前用户自己的文件（数据权限隔离）
+          and deleted != 0                                              -- 条件2：只改已经被删除的文件，正常文件不处理（避免误改）
+          and id in
+             <!-- foreach：把ID列表拼成 (1,2,3) 格式的in条件，批量操作 -->
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </update>
+
+    <delete id="hardDeleteByIds">
+        delete from user_file
+        where user_id = #{userId}                                        -- 条件1：只能删自己的文件，越权防护
+          and deleted != 0                                               -- 条件2：只删已经在回收站（逻辑删除）的文件
+                                                                -- 强制所有删除都必须走「先进回收站」的流程，不允许直接把正常文件物理删掉。
+          and id in
+        <!-- 批量ID拼接 -->
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </delete>
+
+</mapper>
+
+
+
+
+

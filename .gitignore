@@ -1,0 +1,14 @@
+*.idea
+*.target/target/
+*/target/
+*.log
+.idea/
+.vscode/
+**/target/
+**/node_modules/
+**/dist/
+*.jar
+*.war
+**/src/main/resources/*.yml
+**/src/main/resources/*.yaml
+**/src/main/resources/*.properties
