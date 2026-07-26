@@ -12,3 +12,8 @@
 **/src/main/resources/*.yml
 **/src/main/resources/*.yaml
 **/src/main/resources/*.properties
+.tools/
+.DS_Store
+logs/
+local-data/
+tests/jmeter/*.jtl
