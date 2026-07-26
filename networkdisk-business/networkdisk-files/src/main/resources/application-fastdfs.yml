@@ -1,0 +1,20 @@
+# Activate with: --spring.profiles.active=fastdfs
+# Environment-specific tracker addresses belong in Nacos or deployment config.
+com:
+  disk:
+    file:
+      storage:
+        engine:
+          type: fdfs
+          oss:
+            enabled: false
+          fdfs:
+            group: group1
+            temporary-chunk-path: ./local-data/fastdfs/chunks
+            temporary-merge-path: ./local-data/fastdfs/merged
+
+fdfs:
+  connect-timeout: 600
+  so-timeout: 1500
+  tracker-list:
+    - 127.0.0.1:22122

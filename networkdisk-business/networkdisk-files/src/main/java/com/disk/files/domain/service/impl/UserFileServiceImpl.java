@@ -283,7 +283,6 @@ public class UserFileServiceImpl extends ServiceImpl<UserFileMapper, UserFileDO>
         return true;
     }
 
-
     @Transactional(rollbackFor = Exception.class)
     @Override
     public void upload(UploadFileContext context) {
@@ -352,16 +351,26 @@ public class UserFileServiceImpl extends ServiceImpl<UserFileMapper, UserFileDO>
     }
 
 
+    @Transactional(rollbackFor = Exception.class)
+    @DistributeLock(scene = "FILE_CHUNK_MERGE", keyExpression = "#context.userId + '-' + #context.identifier", expireTime = 60000)
     @Override
     public void mergeFile(FileChunkMergeContext context) {
         mergeFileChunkAndSaveFile(context);
-        saveUserFile(context.getParentId(),
-                context.getFilename(),
-                FolderFlagEnum.NO,
-                FileTypeEnum.getFileTypeCode(FileUtil.getFileSuffix(context.getFilename())),
-                context.getRecord().getId(),
-                context.getUserId(),
-                context.getRecord().getFileSizeDesc());
+        try {
+            saveUserFile(context.getParentId(),
+                    context.getFilename(),
+                    FolderFlagEnum.NO,
+                    FileTypeEnum.getFileTypeCode(FileUtil.getFileSuffix(context.getFilename())),
+                    context.getRecord().getId(),
+                    context.getUserId(),
+                    context.getRecord().getFileSizeDesc());
+            fileService.cleanupMergedChunks(context.getIdentifier(), context.getUserId());
+        } catch (RuntimeException exception) {
+            if (context.getRecord() != null) {
+                fileService.compensateMergedFile(context.getRecord().getRealPath());
+            }
+            throw exception;
+        }
     }
 
     /**
