@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
  */
 @Data
 @Component
-@ConditionalOnProperty(prefix = "com.disk.file.storage.engine.oss", name = "endpoint")
+@ConditionalOnProperty(prefix = "com.disk.file.storage.engine.oss", name = "enabled", havingValue = "true")
 @ConfigurationProperties(prefix = "com.disk.file.storage.engine.oss")
 public class OssStorageEngineConfig {
 

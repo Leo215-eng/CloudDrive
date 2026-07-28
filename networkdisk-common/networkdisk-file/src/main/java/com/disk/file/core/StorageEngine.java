@@ -48,6 +48,15 @@ public interface StorageEngine {
     void mergeFile(MergeFileContext context) throws IOException;
 
     /**
+     * Removes local staging chunks only after the completed file metadata has
+     * been persisted. Remote engines that do not use local staging can keep
+     * the default no-op implementation.
+     */
+    default void cleanupTemporaryChunks(java.util.List<String> realPathList) throws IOException {
+        // no-op
+    }
+
+    /**
      * 读取文件内容写入到输出流中
      *
      * @param context

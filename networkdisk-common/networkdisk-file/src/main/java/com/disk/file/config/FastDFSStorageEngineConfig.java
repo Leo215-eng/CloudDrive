@@ -3,6 +3,7 @@ package com.disk.file.config;
 import com.google.common.collect.Lists;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.EnableMBeanExport;
 import org.springframework.jmx.support.RegistrationPolicy;
@@ -17,6 +18,7 @@ import java.util.List;
  */
 @Data
 @Component
+@ConditionalOnProperty(prefix = "com.disk.file.storage.engine", name = "type", havingValue = "fdfs")
 @ConfigurationProperties(prefix = "com.disk.file.storage.engine.fdfs")
 @ComponentScan(value = {"com.github.tobato.fastdfs.service", "com.github.tobato.fastdfs.domain"})
 @EnableMBeanExport(registration = RegistrationPolicy.IGNORE_EXISTING)
@@ -42,4 +44,16 @@ public class FastDFSStorageEngineConfig {
      * fastdfs对外域名
      */
     private String outUrl;
+
+    /**
+     * Local staging path for resumable-upload chunks before FastDFS receives a
+     * verified, merged file stream.
+     */
+    private String temporaryChunkPath;
+
+    /**
+     * Local staging path for a merged file; it is never persisted as a FastDFS
+     * file path.
+     */
+    private String temporaryMergePath;
 }

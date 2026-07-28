@@ -34,7 +34,7 @@ export default defineConfig({
       },
       // 匹配/api/v1/files开头的请求（文件服务）
       '/api/v1/files': {
-        target: 'http://localhost:8082',
+        target: 'http://localhost:8083',
         changeOrigin: true,
         rewrite: path => path.replace(/^\/api\/v1\/files/, '/api/v1/files')
       },

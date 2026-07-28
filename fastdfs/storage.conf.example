@@ -1,0 +1,11 @@
+# 配置契约示例；两个 Storage 唯一不同的是各自独立的 Docker 命名卷。
+disabled=false
+group_name=group1
+bind_addr=0.0.0.0
+port=23000
+base_path=/var/fdfs
+store_path_count=1
+store_path0=/var/fdfs
+tracker_server=fastdfs-tracker:22122
+http.server_port=8080
+
