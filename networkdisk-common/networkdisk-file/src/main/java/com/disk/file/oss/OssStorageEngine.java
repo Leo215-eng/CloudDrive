@@ -38,6 +38,7 @@ import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -61,6 +62,7 @@ import java.util.stream.Collectors;
 @Component
 // 仅当 Spring 容器已有 OSSClient 时才创建该组件。
 @ConditionalOnBean(OSSClient.class)
+@ConditionalOnProperty(prefix = "com.disk.file.storage.engine", name = "type", havingValue = "oss")
 public class OssStorageEngine extends AbstractStorageEngine {
 
     // OSS 单次 tmultipar upload 最多允许 10,000 个分片。

@@ -8,9 +8,9 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.disk.base.exception.BizException;
 import com.disk.base.exception.SystemException;
 import com.disk.base.utils.IdUtil;
+import com.disk.file.context.DeleteFileContext;
 import com.disk.file.context.MergeFileContext;
 import com.disk.file.core.StorageEngine;
-import com.disk.files.domain.context.DeleteFileContext;
 import com.disk.files.domain.context.FileChunkMergeAndSaveContext;
 import com.disk.files.domain.context.ListFileContext;
 import com.disk.files.domain.context.SaveFileContext;
@@ -101,6 +101,8 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, FileDO> implements 
     @Override
     public void mergeFileChunkAndSaveFile(FileChunkMergeAndSaveContext context) {
         // 第一步：根据MD5+用户ID查询所有有效分片，合并磁盘文件
+        // Keep source chunks until the completed-file metadata is persisted.
+        // A database failure can then be retried without uploading chunks again.
         doMergeFileChunk(context);
         // 第二步：将合并后的完整文件信息存入物理文件表file，返回FileDO记录
         FileDO record = doSaveFile(context.getFilename(), context.getRealPath(), context.getTotalSize(), context.getIdentifier(), context.getUserId());
@@ -115,7 +117,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, FileDO> implements 
      * 4. 拼接成功后物理删除所有临时分片文件 + 删除数据库分片记录
      * @param context 分片合并上下文
      */
-    private void doMergeFileChunk(FileChunkMergeAndSaveContext context) {
+    private List<FileChunkDO> doMergeFileChunk(FileChunkMergeAndSaveContext context) {
         // 构建分片查询条件
         QueryWrapper<FileChunkDO> queryWrapper = Wrappers.query();
         // 匹配文件唯一MD5标识
@@ -161,7 +163,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, FileDO> implements 
                 .map(FileChunkDO::getId)
                 .collect(Collectors.toList());
         // 物理删除临时分片文件 + 删除file_chunk表分片记录，释放磁盘与数据库空间
-        fileChunkService.removeChunkRecordsPhysically(fileChunkRecordIdList);
+        return chunkRecoredList;
     }
 
     /**
@@ -174,15 +176,57 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, FileDO> implements 
      * @param userId 上传用户ID
      * @return 新增的物理文件数据库记录
      */
+    private void cleanupMergedChunks(List<FileChunkDO> chunkRecordList) {
+        List<String> chunkPaths = chunkRecordList.stream()
+                .map(FileChunkDO::getRealPath)
+                .collect(Collectors.toList());
+        List<Long> chunkRecordIds = chunkRecordList.stream()
+                .map(FileChunkDO::getId)
+                .collect(Collectors.toList());
+        try {
+            storageEngine.cleanupTemporaryChunks(chunkPaths);
+        } catch (IOException exception) {
+            // The completed file is already durable. Leave records for expiry
+            // cleanup rather than turning a cleanup failure into user failure.
+            return;
+        }
+        fileChunkService.removeChunkRecordsPhysically(chunkRecordIds);
+    }
+
+    @Override
+    public void cleanupMergedChunks(String identifier, Long userId) {
+        QueryWrapper<FileChunkDO> queryWrapper = Wrappers.query();
+        queryWrapper.eq("identifier", identifier);
+        queryWrapper.eq("create_user", userId);
+        queryWrapper.ge("expiration_time", new Date());
+        cleanupMergedChunks(fileChunkService.list(queryWrapper));
+    }
+
+    @Override
+    public void compensateMergedFile(String realPath) {
+        try {
+            DeleteFileContext deleteFileContext = new DeleteFileContext();
+            deleteFileContext.setRealFilePathList(Lists.newArrayList(realPath));
+            storageEngine.delete(deleteFileContext);
+        } catch (IOException exception) {
+            // The caller rethrows its original database exception. A scheduled
+            // orphan scanner is still required for a failed remote deletion.
+        }
+    }
+
     private FileDO doSaveFile(String filename, String realPath, Long totalSize, String identifier, Long userId) {
         // 封装FileDO实体，填充文件路径、大小、MD5、上传人等信息
         FileDO record = assembleFileDO(filename, realPath, totalSize, identifier, userId);
         // 插入物理文件表
-        if (!save(record)) {
+        if (save(record)) {
+            return record;
+        }
+        {
             // 入库失败容错分支：磁盘文件已生成但数据库插入失败，需要删除刚合并的完整文件，避免垃圾文件残留
             try {
                 DeleteFileContext deleteFileContext = new DeleteFileContext();
                 deleteFileContext.setRealFilePathList(Lists.newArrayList(realPath));
+                storageEngine.delete(deleteFileContext);
                 // TODO 调用存储引擎删除磁盘上合并好的完整文件
             } catch (Exception e) {
                 e.printStackTrace();
@@ -190,7 +234,7 @@ public class FileServiceImpl extends ServiceImpl<FileMapper, FileDO> implements 
             }
         }
         // 返回物理文件记录，外层拿record.id创建user_file用户目录映射
-        return record;
+        throw new SystemException("completed file metadata persistence failed");
     }
 
 

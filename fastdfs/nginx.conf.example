@@ -1,0 +1,10 @@
+# FastDFS Nginx 模块配置契约示例。
+# 真实 mod_fastdfs.conf 由镜像生成；访问路径必须保持 /group1/M00/...，不要暴露 Storage 内网地址。
+server {
+    listen 8080;
+    server_name _;
+
+    location /group1/M00/ {
+        ngx_fastdfs_module;
+    }
+}

@@ -1,0 +1,8 @@
+# 配置契约示例：实际运行配置由镜像根据 docker-compose.fastdfs.yml 的环境变量生成。
+# 若启用 CUSTOM_CONFIG=true，须补齐镜像要求的完整 /etc/fdfs 配置目录，不能只挂载本文件。
+disabled=false
+bind_addr=0.0.0.0
+port=22122
+base_path=/var/fdfs
+http.server_port=8080
+

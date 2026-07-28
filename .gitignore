@@ -12,3 +12,11 @@
 **/src/main/resources/*.yml
 **/src/main/resources/*.yaml
 **/src/main/resources/*.properties
+!networkdisk-business/networkdisk-files/src/main/resources/application-fastdfs.yml
+!networkdisk-business/networkdisk-files/src/main/resources/application-files-instance-a.yml
+!networkdisk-business/networkdisk-files/src/main/resources/application-files-instance-b.yml
+.tools/
+.DS_Store
+logs/
+local-data/
+tests/jmeter/*.jtl

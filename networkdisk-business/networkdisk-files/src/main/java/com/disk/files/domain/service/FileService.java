@@ -31,4 +31,8 @@ public interface FileService extends IService<FileDO> {
     void saveFile(SaveFileContext context);
 
     void mergeFileChunkAndSaveFile(FileChunkMergeAndSaveContext fileChunkMergeAndSaveContext);
+
+    void cleanupMergedChunks(String identifier, Long userId);
+
+    void compensateMergedFile(String realPath);
 }

@@ -10,6 +10,7 @@ import com.disk.file.context.StoreFileContext;
 import com.disk.file.core.AbstractStorageEngine;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
@@ -25,6 +26,7 @@ import java.util.List;
  */
 @Primary
 @Component
+@ConditionalOnProperty(prefix = "com.disk.file.storage.engine", name = "type", havingValue = "local", matchIfMissing = true)
 public class LocalStorageEngine extends AbstractStorageEngine {
 
 
@@ -55,6 +57,11 @@ public class LocalStorageEngine extends AbstractStorageEngine {
     @Override
     protected void doDelete(DeleteFileContext context) throws IOException {
         FileUtil.deleteFiles(context.getRealFilePathList());
+    }
+
+    @Override
+    public void cleanupTemporaryChunks(List<String> realPathList) throws IOException {
+        FileUtil.deleteFiles(realPathList);
     }
 
     /**
