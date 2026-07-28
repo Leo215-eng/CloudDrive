@@ -54,11 +54,14 @@ import com.disk.files.infrastructure.mapper.UserFileMapper;
 import com.disk.base.utils.FileUtil;
 import com.disk.lock.DistributeLock;
 import com.google.common.collect.Lists;
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.dromara.easyes.core.conditions.select.LambdaEsQueryWrapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -69,6 +72,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -93,9 +97,13 @@ import static com.disk.files.exception.FilesErrorCode.TARGET_FOLDER_TYPE_ERROR;
  * @author weikunkun
  */
 @Service
+@Slf4j
 public class UserFileServiceImpl extends ServiceImpl<UserFileMapper, UserFileDO> implements UserFileService {
 
     private static final int HOME_RECENT_FILE_LIMIT = 5;
+    private static final String SEARCH_MODE_PRODUCTION = "production";
+    private static final String SEARCH_MODE_MYSQL_ONLY = "mysql-only";
+    private static final String SEARCH_MODE_ES_ONLY = "es-only";
 
     private static final List<Integer> HOME_DOCUMENT_FILE_TYPES = List.of(
             FileTypeEnum.EXCEL_FILE.getCode(),
@@ -121,11 +129,29 @@ public class UserFileServiceImpl extends ServiceImpl<UserFileMapper, UserFileDO>
     @Autowired
     private UserFileMapper userFileMapper;
 
-    @Autowired
+    @Autowired(required = false)
     private UserFileESMapper fileEsMapper;
 
     @Autowired
     private DocumentAiInitializer documentAiInitializer;
+
+    @Value("${com.disk.search.mode:production}")
+    private String searchMode;
+
+    @Value("${com.disk.search.consistency-window-ms:5000}")
+    private long searchConsistencyWindowMs;
+
+    @PostConstruct
+    void validateSearchConfiguration() {
+        searchMode = StringUtils.lowerCase(StringUtils.trim(searchMode));
+        if (!Set.of(SEARCH_MODE_PRODUCTION, SEARCH_MODE_MYSQL_ONLY, SEARCH_MODE_ES_ONLY).contains(searchMode)) {
+            throw new IllegalArgumentException("com.disk.search.mode must be production, mysql-only or es-only");
+        }
+        if (searchConsistencyWindowMs < 0) {
+            throw new IllegalArgumentException("com.disk.search.consistency-window-ms must not be negative");
+        }
+        log.info("file search configured. mode={}, consistencyWindowMs={}", searchMode, searchConsistencyWindowMs);
+    }
 
 
     @Override
@@ -244,6 +270,7 @@ public class UserFileServiceImpl extends ServiceImpl<UserFileMapper, UserFileDO>
      * @return boolean true=秒传成功，false=无匹配文件，需要前端走分片上传
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public boolean secUpload(SecUploadFileContext context) {
         // 1. 校验登录用户ID不能为空，无用户直接抛业务异常
         if (Objects.isNull(context.getUserId())) {
@@ -352,16 +379,26 @@ public class UserFileServiceImpl extends ServiceImpl<UserFileMapper, UserFileDO>
     }
 
 
+    @Transactional(rollbackFor = Exception.class)
+    @DistributeLock(scene = "FILE_CHUNK_MERGE", keyExpression = "#context.userId + '-' + #context.identifier", expireTime = 60000)
     @Override
     public void mergeFile(FileChunkMergeContext context) {
         mergeFileChunkAndSaveFile(context);
-        saveUserFile(context.getParentId(),
-                context.getFilename(),
-                FolderFlagEnum.NO,
-                FileTypeEnum.getFileTypeCode(FileUtil.getFileSuffix(context.getFilename())),
-                context.getRecord().getId(),
-                context.getUserId(),
-                context.getRecord().getFileSizeDesc());
+        try {
+            saveUserFile(context.getParentId(),
+                    context.getFilename(),
+                    FolderFlagEnum.NO,
+                    FileTypeEnum.getFileTypeCode(FileUtil.getFileSuffix(context.getFilename())),
+                    context.getRecord().getId(),
+                    context.getUserId(),
+                    context.getRecord().getFileSizeDesc());
+            fileService.cleanupMergedChunks(context.getIdentifier(), context.getUserId());
+        } catch (RuntimeException exception) {
+            if (context.getRecord() != null) {
+                fileService.compensateMergedFile(context.getRecord().getRealPath());
+            }
+            throw exception;
+        }
     }
 
     /**
@@ -507,11 +544,14 @@ public class UserFileServiceImpl extends ServiceImpl<UserFileMapper, UserFileDO>
 
         List<FileSearchVO> result;
 
+        // 基准压测模式：完全绕过 ES。
+        if (SEARCH_MODE_MYSQL_ONLY.equals(searchMode)) {
+            result = doSearch(context, searchTerms);
         // 2. 优先走 ES 搜索
         // fileEsMapper 是操作 ES 索引 user_file_index 的 Mapper
         // 可以类比 MyBatis-Plus 的 Mapper，只不过它查的是 ES，不是 MySQL
         // fileEsMapper != null 代表 ES 初始化成功，服务可用
-        if (fileEsMapper != null) {
+        } else if (fileEsMapper != null) {
             // 创建 ES 查询条件构造器，类比 MP 的 LambdaQueryWrapper
             // UserFileESEntity 是 ES 索引对应的实体类，对应 ES 里的 user_file 索引
             LambdaEsQueryWrapper<UserFileESEntity> wrapper = new LambdaEsQueryWrapper<>();
@@ -574,31 +614,49 @@ public class UserFileServiceImpl extends ServiceImpl<UserFileMapper, UserFileDO>
             // ========== 步骤7：执行 ES 查询，拿到结果 ==========
             // selectList：查询多条文档，类比 MP 的 selectList
             // docs 就是 ES 返回的文档列表，每一条对应一个文件
-            List<UserFileESEntity> docs = fileEsMapper.selectList(wrapper);
+            try {
+                int esPageNum = SEARCH_MODE_PRODUCTION.equals(searchMode) ? 1 : context.getPageNum();
+                int esPageSize = SEARCH_MODE_PRODUCTION.equals(searchMode)
+                        ? Math.multiplyExact(context.getPageNum(), context.getPageSize())
+                        : context.getPageSize();
+                List<UserFileESEntity> docs = fileEsMapper.pageQuery(wrapper, esPageNum, esPageSize).getList();
 
             // ========== 步骤8：ES 结果转成前端需要的 VO 对象 ==========
             // stream().map()：Java 流式编程，把 ES 实体类 转换成 前端视图对象 VO
             // 为什么要转？ES 实体是给后端用的，字段很多；VO 是给前端用的，只保留页面需要的字段
-            result = docs.stream().map(doc -> {
-                FileSearchVO vo = new FileSearchVO();
-                vo.setFileId(doc.getId());
-                vo.setFilename(doc.getFilename());
-                vo.setParentId(doc.getParentId());
-                vo.setFolderFlag(doc.getFolderFlag());
-                vo.setFileType(doc.getFileType());
-                vo.setFileSizeDesc(doc.getFileSizeDesc());
-                vo.setUpdateTime(doc.getGmtModified());
-                return vo;
-            }).toList();
+                result = docs.stream().map(doc -> {
+                    FileSearchVO vo = new FileSearchVO();
+                    vo.setFileId(doc.getId());
+                    vo.setFilename(doc.getFilename());
+                    vo.setParentId(doc.getParentId());
+                    vo.setFolderFlag(doc.getFolderFlag());
+                    vo.setFileType(doc.getFileType());
+                    vo.setFileSizeDesc(doc.getFileSizeDesc());
+                    vo.setUpdateTime(doc.getGmtModified());
+                    return vo;
+                }).toList();
 
             // ========== 步骤9：ES 没查到结果，降级去查 MySQL ==========
             // 场景：ES 数据还没同步、索引为空，导致 ES 搜不到，但 MySQL 里实际有数据
             // 去查 MySQL 保证用户能搜到结果，不会出现“明明有文件却搜不到”的情况
-            if (CollectionUtils.isEmpty(result)) {
+                if (CollectionUtils.isEmpty(result) && SEARCH_MODE_PRODUCTION.equals(searchMode)) {
+                    result = doSearch(context, searchTerms);
+                } else if (SEARCH_MODE_PRODUCTION.equals(searchMode)) {
+                    result = mergeRecentMysqlChanges(context, searchTerms, result);
+                    result = pageResult(result, context.getPageNum(), context.getPageSize());
+                }
+            } catch (Exception e) {
+                if (SEARCH_MODE_ES_ONLY.equals(searchMode)) {
+                    throw new IllegalStateException("ES-only search failed", e);
+                }
+                log.warn("ES search failed; falling back to MySQL", e);
                 result = doSearch(context, searchTerms);
             }
 
         } else {
+            if (SEARCH_MODE_ES_ONLY.equals(searchMode)) {
+                throw new IllegalStateException("ES-only search requires an available Elasticsearch mapper");
+            }
             // ========== 步骤10：ES 完全不可用，直接查 MySQL ==========
             // 场景：ES 服务挂了、项目没配置 ES，mapper 是 null
             // 直接走 MySQL 模糊查询，功能不失效
@@ -1464,6 +1522,8 @@ public class UserFileServiceImpl extends ServiceImpl<UserFileMapper, UserFileDO>
             }
         });
         queryWrapper.orderByDesc("gmt_modified");
+        int offset = Math.multiplyExact(context.getPageNum() - 1, context.getPageSize());
+        queryWrapper.last("LIMIT " + offset + "," + context.getPageSize());
 
         List<UserFileDO> records = list(queryWrapper);
         return records.stream().map(record -> {
@@ -1477,6 +1537,53 @@ public class UserFileServiceImpl extends ServiceImpl<UserFileMapper, UserFileDO>
             vo.setUpdateTime(record.getGmtModified());
             return vo;
         }).toList();
+    }
+
+    private List<FileSearchVO> mergeRecentMysqlChanges(FileSearchContext context,
+                                                        List<String> searchTerms,
+                                                        List<FileSearchVO> esResult) {
+        Date since = new Date(System.currentTimeMillis() - searchConsistencyWindowMs);
+        // ponytail: bounded recent-delta scan; increase the window if Canal P95 exceeds it.
+        List<UserFileDO> changed = list(new QueryWrapper<UserFileDO>()
+                .eq("user_id", context.getUserId())
+                .ge("gmt_modified", since));
+        if (changed.isEmpty()) {
+            return esResult;
+        }
+        Map<Long, FileSearchVO> merged = new HashMap<>();
+        esResult.forEach(item -> merged.put(item.getFileId(), item));
+        changed.forEach(item -> merged.remove(item.getId()));
+        changed.stream()
+                .filter(item -> Objects.equals(item.getDeleted(), DeleteEnum.NO.getCode()))
+                .filter(item -> EmptyUtil.isEmpty(context.getFileTypeArray()) || context.getFileTypeArray().contains(item.getFileType()))
+                .filter(item -> matchesSearchTerms(item.getFilename(), searchTerms, context.getKeyword()))
+                .forEach(item -> merged.put(item.getId(), toFileSearchVO(item)));
+        return merged.values().stream()
+                .sorted(Comparator.comparing(FileSearchVO::getUpdateTime, Comparator.nullsLast(Date::compareTo)).reversed())
+                .toList();
+    }
+
+    static <T> List<T> pageResult(List<T> records, int pageNum, int pageSize) {
+        int from = Math.min(Math.multiplyExact(pageNum - 1, pageSize), records.size());
+        int to = Math.min(from + pageSize, records.size());
+        return records.subList(from, to);
+    }
+
+    private boolean matchesSearchTerms(String filename, List<String> searchTerms, String keyword) {
+        List<String> terms = CollectionUtils.isEmpty(searchTerms) ? List.of(keyword) : searchTerms;
+        return terms.stream().filter(StringUtils::isNotBlank).anyMatch(term -> StringUtils.contains(filename, term));
+    }
+
+    private FileSearchVO toFileSearchVO(UserFileDO record) {
+        FileSearchVO vo = new FileSearchVO();
+        vo.setFileId(record.getId());
+        vo.setParentId(record.getParentId());
+        vo.setFilename(record.getFilename());
+        vo.setFolderFlag(record.getFolderFlag());
+        vo.setFileType(record.getFileType());
+        vo.setFileSizeDesc(record.getFileSizeDesc());
+        vo.setUpdateTime(record.getGmtModified());
+        return vo;
     }
 
 

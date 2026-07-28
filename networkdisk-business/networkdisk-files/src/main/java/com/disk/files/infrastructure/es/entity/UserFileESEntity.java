@@ -1,7 +1,6 @@
 package com.disk.files.infrastructure.es.entity;
 
 import lombok.Data;
-import org.dromara.easyes.annotation.HighLight;
 import org.dromara.easyes.annotation.IndexField;
 import org.dromara.easyes.annotation.IndexId;
 import org.dromara.easyes.annotation.IndexName;
@@ -23,7 +22,7 @@ import java.util.Date;
 public class UserFileESEntity {
 
     /** 主键ID（对应 ES _id） */
-    @IndexId(type = IdType.CUSTOMIZE)
+    @IndexId(type = IdType.CUSTOMIZE, writeToSource = false)
     //    标记这个字段是 ES 文档的唯一主键（对应 ES 原生的 _id 字段），等同于数据库表的主键 ID。
 //    type = IdType.CUSTOMIZE：主键类型为「自定义」，也就是我们自己控制 ID 值。
 //    这里直接用数据库里文件的自增 ID 当 ES 的文档 ID，两边 ID 完全对应，方便数据同步和查询。
@@ -45,7 +44,6 @@ public class UserFileESEntity {
     private Long realFileId;
 
     /** 文件名（分词、支持搜索、高亮） */
-    @HighLight(mappingField = "filename")
     @IndexField(fieldType = FieldType.TEXT, analyzer = Analyzer.IK_SMART, value = "filename")
     private String filename;
 

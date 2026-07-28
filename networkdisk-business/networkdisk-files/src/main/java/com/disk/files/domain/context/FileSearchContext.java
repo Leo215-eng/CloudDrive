@@ -28,4 +28,8 @@ public class FileSearchContext {
      * 当前登录的用户ID
      */
     private Long userId;
+
+    private int pageNum;
+
+    private int pageSize;
 }

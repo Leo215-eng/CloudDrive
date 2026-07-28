@@ -438,6 +438,8 @@ public class UserFileController {
         context.setKeyword(fileSearchParam.getKeyword());
         // 当前登录用户ID：从登录上下文取，保证只能搜自己的文件（用户数据隔离）
         context.setUserId(UserIdUtil.get());
+        context.setPageNum(fileSearchParam.getPageNum());
+        context.setPageSize(fileSearchParam.getPageSize());
 
         // 2. 处理文件类型过滤参数
         String fileTypes = fileSearchParam.getFileTypes();

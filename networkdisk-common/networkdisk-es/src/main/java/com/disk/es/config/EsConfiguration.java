@@ -1,6 +1,6 @@
 package com.disk.es.config;
 
-import org.dromara.easyes.starter.register.EsMapperScan;
+import org.dromara.easyes.spring.annotation.EsMapperScan;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
 

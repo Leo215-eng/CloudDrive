@@ -12,8 +12,8 @@ import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -33,8 +33,7 @@ import java.util.Map;
 @EnableConfigurationProperties(CanalSyncProperties.class)
 //@ConditionalOnProperty：条件注解—— 只有配置文件里 com.disk.canal.enable = true 时，这个类才会生效。
 @ConditionalOnProperty(prefix = "com.disk.canal", name = "enable", havingValue = "true")
-//@ConditionalOnBean：条件注解—— 只有 ES 的 Mapper 存在（也就是 ES 配置成功、可用）时，才启动同步
-@ConditionalOnBean(UserFileESMapper.class)
+@ConditionalOnExpression("${easy-es.enable:false}")
 //implements Runnable：实现 Runnable 接口，因为同步是死循环监听，必须开单独后台线程跑，不能阻塞主程序。
 public class CanalUserFileEsSyncRunner implements Runnable {
 
@@ -52,8 +51,12 @@ public class CanalUserFileEsSyncRunner implements Runnable {
     private Thread workerThread;
     // Canal 连接器：负责和 Canal 服务建立连接、拉取消息
     private CanalConnector connector;
-
-//
+    // 启动后台工作线程
+    private void startWorker() {
+        workerThread = new Thread(this, "canal-user-file-es-sync");
+        workerThread.setDaemon(true); // 设置为守护线程：主程序关闭，线程自动跟着关闭
+        workerThread.start();
+    }
 //    项目一启动，这个 Bean 初始化时就会自动开一个后台线程，开始跑同步逻辑；
 //    守护线程的作用：程序关闭时不用手动停线程，不会阻止程序退出。
     // 构造方法：Spring 注入配置和 Mapper，启动同步线程
@@ -62,75 +65,125 @@ public class CanalUserFileEsSyncRunner implements Runnable {
         this.userFileESMapper = userFileESMapper;
         startWorker();
     }
-    // 启动后台工作线程
-    private void startWorker() {
-        workerThread = new Thread(this, "canal-user-file-es-sync");
-        workerThread.setDaemon(true); // 设置为守护线程：主程序关闭，线程自动跟着关闭
-        workerThread.start();
-    }
+
 //    ack /rollback 机制
 //    这是 Canal 保证数据不丢的核心设计：
 //    你拉到消息后，处理成功了，调用 ack 告诉 Canal：“这批我处理完了”，Canal 就会推进进度，下次给你新的；
 //    处理失败了，调用 rollback，Canal 下次还会把这批消息再发给你，直到你处理成功为止；
 //    就像快递签收：签收回单了，快递员就走了；没签收，下次还会再来送。
+//    @Override
+//    public void run() {
+//        // 第一步：创建 Canal 连接器，指定 Canal 服务地址、端口、实例名、账号密码
+//        connector = CanalConnectors.newSingleConnector(
+//                new InetSocketAddress(properties.getHost(), properties.getPort()),
+//                properties.getDestination(),
+//                StringUtils.defaultString(properties.getUsername()),
+//                StringUtils.defaultString(properties.getPassword())
+//        );
+//
+//        try {
+//            // 第二步：连接 Canal 服务
+//            connector.connect();
+//            // 订阅要监听的表（配置里一般是 "coder_pan.user_file"，只监听文件表）
+//            connector.subscribe(properties.getSubscribeFilter());
+//            // 回滚到上次确认的位置，从上次没处理的地方开始，避免丢数据
+//            connector.rollback();
+//            log.info("canal sync started. destination={}, filter={}", properties.getDestination(), properties.getSubscribeFilter());
+//
+//            // 第三步：死循环，持续拉取 binlog 消息
+//            while (running) {
+//                // 拉取一批消息，不自动确认（getWithoutAck）
+//                // batchSize：一次最多拉多少条
+//                Message message = connector.getWithoutAck(properties.getBatchSize());
+//                long batchId = message.getId();
+//                List<CanalEntry.Entry> entries = message.getEntries();
+//
+//                // 没拉到数据，睡一会再拉，避免空转浪费CPU
+//                if (batchId == -1 || CollectionUtils.isEmpty(entries)) {
+//                    sleepQuietly(properties.getPollingIntervalMs());
+//                    continue;
+//                }
+//
+//                boolean success = false;
+//                try {
+//                    // 第四步：处理这一批消息（解析增删改，同步到ES）
+//                    handleEntries(entries);
+//                    success = true;
+//                } catch (Exception e) {
+//                    log.error("canal sync batch handle error, batchId={}", batchId, e);
+//                }
+//
+//                // 第五步：消息确认机制
+//                if (success) {
+//                    // 处理成功 → 确认 ack，Canal 就不会再发这批消息了
+//                    connector.ack(batchId);
+//                } else {
+//                    // 处理失败 → 回滚 rollback，下次还会重新拉这批消息，保证不丢数据
+//                    connector.rollback(batchId);
+//                    sleepQuietly(properties.getPollingIntervalMs());
+//                }
+//            }
+//        } catch (Exception e) {
+//            log.error("canal sync stopped unexpectedly", e);
+//        } finally {
+//            // 最终一定要断开连接
+//            if (connector != null) {
+//                connector.disconnect();
+//            }
+//        }
+//    }
     @Override
     public void run() {
-        // 第一步：创建 Canal 连接器，指定 Canal 服务地址、端口、实例名、账号密码
-        connector = CanalConnectors.newSingleConnector(
-                new InetSocketAddress(properties.getHost(), properties.getPort()),
-                properties.getDestination(),
-                StringUtils.defaultString(properties.getUsername()),
-                StringUtils.defaultString(properties.getPassword())
-        );
+        while (running) {
+            connector = CanalConnectors.newSingleConnector(
+                    new InetSocketAddress(properties.getHost(), properties.getPort()),
+                    properties.getDestination(),
+                    StringUtils.defaultString(properties.getUsername()),
+                    StringUtils.defaultString(properties.getPassword())
+            );
 
-        try {
-            // 第二步：连接 Canal 服务
-            connector.connect();
-            // 订阅要监听的表（配置里一般是 "coder_pan.user_file"，只监听文件表）
-            connector.subscribe(properties.getSubscribeFilter());
-            // 回滚到上次确认的位置，从上次没处理的地方开始，避免丢数据
-            connector.rollback();
-            log.info("canal sync started. destination={}, filter={}", properties.getDestination(), properties.getSubscribeFilter());
+            try {
+                connector.connect();
+                connector.subscribe(properties.getSubscribeFilter());
+                connector.rollback();
 
-            // 第三步：死循环，持续拉取 binlog 消息
-            while (running) {
-                // 拉取一批消息，不自动确认（getWithoutAck）
-                // batchSize：一次最多拉多少条
-                Message message = connector.getWithoutAck(properties.getBatchSize());
-                long batchId = message.getId();
-                List<CanalEntry.Entry> entries = message.getEntries();
+                log.info("canal sync started. destination={}, filter={}",
+                        properties.getDestination(),
+                        properties.getSubscribeFilter());
 
-                // 没拉到数据，睡一会再拉，避免空转浪费CPU
-                if (batchId == -1 || CollectionUtils.isEmpty(entries)) {
-                    sleepQuietly(properties.getPollingIntervalMs());
-                    continue;
+                while (running) {
+                    Message message = connector.getWithoutAck(properties.getBatchSize());
+                    long batchId = message.getId();
+                    List<CanalEntry.Entry> entries = message.getEntries();
+
+                    if (batchId == -1 || CollectionUtils.isEmpty(entries)) {
+                        sleepQuietly(properties.getPollingIntervalMs());
+                        continue;
+                    }
+
+                    try {
+                        handleEntries(entries);
+                        connector.ack(batchId);
+                    } catch (Exception e) {
+                        log.error("canal sync batch handle error, batchId={}", batchId, e);
+                        connector.rollback(batchId);
+                        sleepQuietly(properties.getPollingIntervalMs());
+                    }
                 }
-
-                boolean success = false;
+            } catch (Exception e) {
+                if (running) {
+                    log.error("canal disconnected, retry after 5 seconds", e);
+                }
+            } finally {
                 try {
-                    // 第四步：处理这一批消息（解析增删改，同步到ES）
-                    handleEntries(entries);
-                    success = true;
+                    connector.disconnect();
                 } catch (Exception e) {
-                    log.error("canal sync batch handle error, batchId={}", batchId, e);
-                }
-
-                // 第五步：消息确认机制
-                if (success) {
-                    // 处理成功 → 确认 ack，Canal 就不会再发这批消息了
-                    connector.ack(batchId);
-                } else {
-                    // 处理失败 → 回滚 rollback，下次还会重新拉这批消息，保证不丢数据
-                    connector.rollback(batchId);
-                    sleepQuietly(properties.getPollingIntervalMs());
+                    log.warn("canal disconnect failed", e);
                 }
             }
-        } catch (Exception e) {
-            log.error("canal sync stopped unexpectedly", e);
-        } finally {
-            // 最终一定要断开连接
-            if (connector != null) {
-                connector.disconnect();
+
+            if (running) {
+                sleepQuietly(5000);
             }
         }
     }
@@ -183,11 +236,7 @@ public class CanalUserFileEsSyncRunner implements Runnable {
         userFileESMapper.deleteById(id);
     }
 
-//    为什么要「先更新，失败再插入」？
-//    这就是经典的 Upsert（更新或插入） 逻辑：
-//    如果是 MySQL 更新操作，ES 里本来就有这条数据，直接更新就行；
-//    如果是 MySQL 新增操作，ES 里没有，更新会返回 0，这时再执行插入；
-//    一套逻辑同时兼容新增和修改，不用判断事件类型，简单可靠，保证数据最终一致。
+//    ES Index API 以相同 ID 写入时会自动覆盖已有文档，因此同时满足新增和更新。
     private void handleUpsert(List<CanalEntry.Column> columns) {
         Map<String, String> values = toValueMap(columns);
         Long id = asLong(values.get("id"));
@@ -212,12 +261,7 @@ public class CanalUserFileEsSyncRunner implements Runnable {
         entity.setDeleted(asInteger(values.get("deleted")));
         entity.setLockVersion(asInteger(values.get("lock_version")));
 
-        // 先尝试按 ID 更新 ES 文档
-        Integer updated = userFileESMapper.updateById(entity);
-        // 更新失败（说明 ES 里没有这条数据，是新增的），就执行插入
-        if (updated == null || updated <= 0) {
-            userFileESMapper.insert(entity);
-        }
+        userFileESMapper.insert(entity);
     }
 
 

@@ -79,6 +79,7 @@ CREATE TABLE `user_file` (
                              PRIMARY KEY (`id`) USING BTREE,
                              KEY `index_file_list` (`user_id`, `deleted`, `parent_id`, `file_type`, `id`, `filename`, `folder_flag`, `file_size_desc`, `gmt_create`, `gmt_modified`) USING BTREE COMMENT '查询文件列表索引',
                              KEY `idx_user_folder` (`user_id`, `deleted`, `folder_flag`, `parent_id`) USING BTREE,
+                             KEY `idx_user_modified` (`user_id`, `gmt_modified`) USING BTREE COMMENT 'Canal同步窗口内最近变更查询索引',
                              KEY `idx_parent_deleted` (`parent_id`, `deleted`) USING BTREE,
                              KEY `idx_user_fileid` (`user_id`, `file_id`) USING BTREE
 )   ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
