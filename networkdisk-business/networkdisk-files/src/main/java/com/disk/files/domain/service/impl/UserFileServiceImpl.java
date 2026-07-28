@@ -243,6 +243,7 @@ public class UserFileServiceImpl extends ServiceImpl<UserFileMapper, UserFileDO>
      * @param context 秒传请求上下文对象，封装前端传参：文件名、md5(identifier)、目标文件夹parentId、当前登录userId
      * @return boolean true=秒传成功，false=无匹配文件，需要前端走分片上传
      */
+    @Transactional(rollbackFor = Exception.class)
     @Override
     public boolean secUpload(SecUploadFileContext context) {
         // 1. 校验登录用户ID不能为空，无用户直接抛业务异常
